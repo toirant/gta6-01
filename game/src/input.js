@@ -1,53 +1,82 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Solmar City — keyboard and mouse input, with pointer-drag camera orbit.
+// Written fresh for this game; no library code.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+export class Input {
+  constructor(canvas) {
+    this.keys = new Set();
+    this.pressed = new Set(); // keys pressed since last poll (edge-triggered)
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseDown = false;
+    this.mouseClicked = false; // left button edge
+    this.rightClicked = false;
+    this.dragging = false;
+    this.pointerLocked = false;
+    this.canvas = canvas;
+    this.onPause = null;
+    this.onAnyKey = null;
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+    window.addEventListener('keydown', (e) => {
+      if (e.repeat) return;
+      this.keys.add(e.code);
+      this.pressed.add(e.code);
+      if (e.code === 'Escape' || e.code === 'KeyP') {
+        if (this.onPause) this.onPause();
+      }
+      if (this.onAnyKey) this.onAnyKey();
+      if (['Space', 'ArrowUp', 'ArrowDown'].includes(e.code)) e.preventDefault();
+    });
+    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('blur', () => this.keys.clear());
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
-  let actions = 0;
+    canvas.addEventListener('mousedown', (e) => {
+      this.mouseDown = true;
+      this.dragging = true;
+      if (e.button === 0) this.mouseClicked = true;
+      if (e.button === 2) this.rightClicked = true;
+      if (this.onAnyKey) this.onAnyKey();
+    });
+    window.addEventListener('mouseup', () => { this.mouseDown = false; this.dragging = false; });
+    window.addEventListener('mousemove', (e) => {
+      if (this.pointerLocked) {
+        this.mouseDX += e.movementX;
+        this.mouseDY += e.movementY;
+      } else if (this.dragging) {
+        this.mouseDX += e.movementX;
+        this.mouseDY += e.movementY;
+      }
+    });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    document.addEventListener('pointerlockchange', () => {
+      this.pointerLocked = document.pointerLockElement === canvas;
+    });
+  }
 
-  window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
-  });
+  down(code) { return this.keys.has(code); }
+  /** True once for the frame the key went down. */
+  hit(code) { return this.pressed.has(code); }
 
-  return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
-    },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
+  /** Ask the browser to lock the pointer (called from a user gesture). */
+  lockPointer() {
+    try { this.canvas.requestPointerLock(); } catch (err) { /* pointer lock is optional */ }
+  }
+
+  /** Movement axes: forward/strafe in -1..1, from WASD or arrows. */
+  axes() {
+    let f = 0, s = 0;
+    if (this.down('KeyW') || this.down('ArrowUp')) f += 1;
+    if (this.down('KeyS') || this.down('ArrowDown')) f -= 1;
+    if (this.down('KeyD') || this.down('ArrowRight')) s += 1;
+    if (this.down('KeyA') || this.down('ArrowLeft')) s -= 1;
+    return { f, s };
+  }
+
+  /** Consume per-frame edge state after the game loop reads it. */
+  endFrame() {
+    this.pressed.clear();
+    this.mouseDX = 0;
+    this.mouseDY = 0;
+    this.mouseClicked = false;
+    this.rightClicked = false;
+  }
 }
