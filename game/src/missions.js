@@ -1,205 +1,152 @@
-// Solmar City — missions and story: three jobs for Mara Voss.
-// Each mission is a list of steps; reaching a marker (or a timed goal) advances it.
-// Markers are a floating beacon plus a minimap blip and a HUD objective line.
-
-import { dist2D } from './util.js';
-import { CITY_HALF } from './world.js';
-
-export const MISSIONS = [
-  {
-    id: 'pickup',
-    title: 'The Pickup',
-    intro: 'Dario needs a package off the marina pier. Grab it, then bring it to the garage on Coral Row. Keep it quiet.',
-    reward: 500,
-    steps: [
-      { kind: 'goto', label: 'Go to the marina pier', x: -52, z: CITY_HALF + 55, radius: 6 },
-      { kind: 'collect', label: 'Press E to pick up the package', x: -52, z: CITY_HALF + 55, radius: 6 },
-      { kind: 'goto', label: 'Deliver the package to the garage', x: 0, z: -29, radius: 6 },
-      { kind: 'collect', label: 'Press E to deliver the package', x: 0, z: -29, radius: 6 },
-    ],
-  },
-  {
-    id: 'courier',
-    title: 'Courier Chase',
-    intro: 'A courier is carrying Dario\'s ledger across town in a yellow cab. Cut him off, take the case, and get it to the hideout.',
-    reward: 800,
-    steps: [
-      { kind: 'chase', label: 'Chase the courier cab and get close', radius: 7, hold: 2.5 },
-      { kind: 'goto', label: 'Take the case to the hideout', x: 87, z: 58, radius: 6 },
-      { kind: 'collect', label: 'Press E to stash the case', x: 87, z: 58, radius: 6 },
-    ],
-  },
-  {
-    id: 'dragnet',
-    title: 'The Dragnet',
-    intro: 'The Solmar PD knows your face now. Lose the heat, then slip back to the hideout. Don\'t get busted.',
-    reward: 1200,
-    steps: [
-      { kind: 'escape', label: 'Lose the wanted level', radius: 0 },
-      { kind: 'goto', label: 'Reach the hideout', x: 87, z: 58, radius: 6 },
-      { kind: 'collect', label: 'Press E to lay low', x: 87, z: 58, radius: 6 },
-    ],
-  },
-];
-
-export class MissionManager {
-  constructor(scene, game) {
-    this.scene = scene;
-    this.game = game;
-    this.activeIndex = 0;   // index into MISSIONS, or -1 when all done
-    this.stepIndex = 0;
-    this.done = [];         // completed mission ids
-    this.chaseCar = null;   // the courier cab for mission 2
-    this.holdTimer = 0;
-    this.beacon = this.makeBeacon();
-    this.beacon.visible = false;
-    scene.add(this.beacon);
-    this.marker = null;     // {x, z} of the current objective
-    this.escaped = false;
-  }
-
-  makeBeacon() {
-    const g = new THREE.Group();
-    const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.6, 1.6, 60, 12, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xffd94d, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false })
-    );
-    beam.position.y = 30;
-    g.add(beam);
-    const diamond = new THREE.Mesh(
-      new THREE.OctahedronGeometry(1.1),
-      new THREE.MeshBasicMaterial({ color: 0xffd94d })
-    );
-    diamond.position.y = 8;
-    g.add(diamond);
-    g.userData.diamond = diamond;
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(3, 0.25, 8, 32),
-      new THREE.MeshBasicMaterial({ color: 0xffd94d })
-    );
-    ring.rotation.x = Math.PI / 2;
-    ring.position.y = 0.15;
-    g.add(ring);
-    return g;
-  }
-
-  get active() { return this.activeIndex >= 0 ? MISSIONS[this.activeIndex] : null; }
-  get step() { return this.active ? this.active.steps[this.stepIndex] : null; }
-  get allDone() { return this.activeIndex < 0; }
-
-  objectiveText() {
-    if (this.allDone) return 'All jobs done — Solmar is yours. Free roam!';
-    const m = this.active;
-    const s = this.step;
-    return `${m.title}: ${s.label}`;
-  }
-
-  startMission(i) {
-    this.activeIndex = i;
-    this.stepIndex = 0;
-    this.holdTimer = 0;
-    this.escaped = false;
-    const m = this.active;
-    this.game.toast(m.title, m.intro);
-    if (m.id === 'courier') this.spawnCourier();
-    if (m.id === 'dragnet') this.game.police.addHeat(70, this.game);
-    this.updateMarker();
-  }
-
-  spawnCourier() {
-    this.game.startCourierCar();
-  }
-
-  updateMarker() {
-    const s = this.step;
-    if (!s) { this.beacon.visible = false; this.marker = null; return; }
-    if (s.kind === 'chase') {
-      this.marker = null; // follows the courier car
-      this.beacon.visible = false;
-      return;
+// missions.js — the three story jobs of Solmar City, with markers, payouts and payoffs.
+window.G = window.G || {};
+(function () {
+  var G = window.G;
+  var MISSION_DEFS = [
+    {
+      id: 1, name: "Harbor Handoff", pay: 500,
+      intro: "Rico needs a package moved off the marina before the tide turns. Grab it, then run it to his garage.",
+      stages: [
+        { text: "Pick up the package at Solmar Marina", hint: "Follow the yellow marker to the docks", target: "marina", radius: 7 },
+        { text: "Deliver the package to Rico's Garage", hint: "Drive it — the streets are faster than your feet", target: "garage", radius: 8 }
+      ]
+    },
+    {
+      id: 2, name: "Courier Chase", pay: 800,
+      intro: "A rival courier lifted Rico's briefcase and is running it across town in a Sunset Coupe. Run him down, take the case, bring it to the depot.",
+      stages: [
+        { text: "Chase down the courier's Sunset Coupe", hint: "Get close and ram him, or shoot out his nerve — he stops when scared", target: "courier", radius: 6 },
+        { text: "Grab the briefcase and take it to the Courier Depot", hint: "Watch for patrols — the case is hot", target: "depot", radius: 7 }
+      ]
+    },
+    {
+      id: 3, name: "Dragnet Escape", pay: 1200,
+      intro: "The Solmar PD has had enough of Mara Voss. A dragnet is closing in — survive it and reach the safehouse.",
+      stages: [
+        { text: "Survive the dragnet — stay alive for 90 seconds", hint: "Keep moving. A car helps. The safehouse opens when the timer ends", target: "survive", radius: 0, seconds: 90 },
+        { text: "Reach the Safehouse", hint: "The dragnet is thinning — go now", target: "safehouse", radius: 8 }
+      ]
     }
-    if (s.kind === 'escape') {
-      this.marker = null;
-      this.beacon.visible = false;
-      return;
-    }
-    this.marker = { x: s.x, z: s.z };
-    this.beacon.position.set(s.x, 0, s.z);
-    this.beacon.visible = true;
-  }
-
-  advance() {
-    const m = this.active;
-    this.stepIndex++;
-    if (this.stepIndex >= m.steps.length) {
-      this.done.push(m.id);
-      this.game.addCash(m.reward, m.title);
-      this.game.audio.missionDone();
-      this.game.toast('Job complete', `${m.title} — earned $${m.reward}.`);
-      this.game.saveGame();
-      const next = this.activeIndex + 1;
-      if (next < MISSIONS.length) {
-        this.startMission(next);
-      } else {
-        this.activeIndex = -1;
-        this.beacon.visible = false;
-        this.marker = null;
-        this.game.toast('Solmar City', 'Every job is done. The city is yours — free roam.');
-      }
-      return;
-    }
-    this.updateMarker();
-  }
-
-  /** Called when the player presses E near a marker. */
-  tryInteract() {
-    const s = this.step;
-    if (!s || s.kind !== 'collect') return false;
-    const p = this.game.player;
-    if (dist2D(p.x, p.z, s.x, s.z) < s.radius + 1) {
-      this.game.audio.pickup();
-      this.advance();
-      return true;
-    }
-    return false;
-  }
-
-  update(dt, time) {
-    // Spin the beacon diamond.
-    if (this.beacon.visible) {
-      this.beacon.userData.diamond.rotation.y += dt * 2;
-      this.beacon.userData.diamond.position.y = 8 + Math.sin(time * 2) * 0.6;
-    }
-    const s = this.step;
-    if (!s) return;
-    const p = this.game.player;
-    if (s.kind === 'goto') {
-      if (dist2D(p.x, p.z, s.x, s.z) < s.radius) {
-        // Arriving at a goto step moves to the collect step automatically.
-        this.stepIndex++;
-        this.updateMarker();
-      }
-    } else if (s.kind === 'chase') {
-      const cab = this.game.courierCar;
-      if (!cab) return;
-      const d = dist2D(p.x, p.z, cab.x, cab.z);
-      if (d < s.radius) {
-        this.holdTimer += dt;
-        if (this.holdTimer >= (s.hold || 2)) {
-          // Grabbed the case.
-          this.game.audio.pickup();
-          this.game.toast('Case grabbed', 'Now get it to the hideout.');
-          if (cab) cab.driver = null;
-          this.game.courierCar = null;
-          this.advance();
+  ];
+  G.missions = {
+    defs: MISSION_DEFS,
+    current: null,
+    markerMesh: null,
+    courierCar: null,
+    ensureMarker: function () {
+      if (this.markerMesh) return this.markerMesh;
+      var geo = new THREE.CylinderGeometry(0.4, 3.2, 14, 12, 1, true);
+      var mat = new THREE.MeshBasicMaterial({ color: 0xffd166, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+      this.markerMesh = new THREE.Mesh(geo, mat);
+      this.markerMesh.position.y = 7;
+      G.scene.add(this.markerMesh);
+      return this.markerMesh;
+    },
+    startNext: function () {
+      var st = G.state;
+      if (this.current) { G.hud.toast("A job is already running — finish it first."); return; }
+      var done = st.missionsDone || 0;
+      if (done >= MISSION_DEFS.length) { G.hud.toast("All three jobs are done. Solmar is yours, Mara."); return; }
+      var def = MISSION_DEFS[done];
+      this.current = { def: def, stage: 0, timer: 0, hasPackage: false };
+      G.hud.toast("JOB " + def.id + ": " + def.name + " — " + G.money(def.pay));
+      G.hud.setObjective(def.name, def.stages[0].text, def.stages[0].hint);
+      G.audio.pickup();
+      if (def.id === 2) this.spawnCourier();
+      if (def.id === 3) { G.police.addHeat(3, "dragnet"); }
+      this.ensureMarker();
+    },
+    spawnCourier: function () {
+      var p = G.player;
+      var car = G.vehicles.create(G.scene, G.vehicles.defs[2], p.pos.x + 40, p.pos.z - 30, Math.PI / 2, { driver: "courier" });
+      car.speed = 14;
+      car.courier = true;
+      car.health = 100;
+      this.courierCar = car;
+      G.hud.toast("There he goes — the Sunset Coupe, heading east!");
+    },
+    targetPos: function () {
+      if (!this.current) return null;
+      var stage = this.current.def.stages[this.current.stage];
+      if (!stage) return null;
+      if (stage.target === "courier" && this.courierCar) return this.courierCar.pos;
+      if (stage.target === "survive") return null;
+      var m = G.world.markers[stage.target];
+      return m ? { x: m.x, z: m.z } : null;
+    },
+    update: function (dt) {
+      if (!this.current) { if (this.markerMesh) this.markerMesh.visible = false; return; }
+      var cur = this.current, stage = cur.def.stages[cur.stage];
+      var p = G.player;
+      if (this.markerMesh) {
+        var tp = this.targetPos();
+        if (tp) {
+          this.markerMesh.visible = true;
+          this.markerMesh.position.x = tp.x;
+          this.markerMesh.position.z = tp.z;
+          this.markerMesh.rotation.y += dt * 1.5;
+          this.markerMesh.position.y = 7 + Math.sin(G.state.time * 2) * 0.8;
+        } else {
+          this.markerMesh.visible = false;
         }
+      }
+      // Courier AI: flee from the player along the roads.
+      if (this.courierCar && stage.target === "courier") {
+        var car = this.courierCar;
+        var d = G.dist2d(car.pos.x, car.pos.z, p.pos.x, p.pos.z);
+        var fleeHeading = G.angleTo(p.pos.x, p.pos.z, car.pos.x, car.pos.z);
+        car.heading = G.turnToward(car.heading, fleeHeading, 1.8 * dt);
+        car.speed = G.lerp(car.speed, d < 12 ? 30 : 16, dt);
+        G.vehicles.updateTrafficCar(car, dt);
+        if (d < 6) this.advanceStage();
+      }
+      if (stage.target === "survive") {
+        cur.timer += dt;
+        var left = Math.max(0, Math.ceil(stage.seconds - cur.timer));
+        G.hud.setObjective(cur.def.name, "Survive the dragnet — " + left + "s left", "Keep moving. A car helps.");
+        if (cur.timer >= stage.seconds) {
+          G.state.wanted = Math.max(0, G.state.wanted - 1);
+          this.advanceStage();
+        }
+        return;
+      }
+      if (stage.target && stage.target !== "courier") {
+        var m = G.world.markers[stage.target];
+        var dd = G.dist2d(p.pos.x, p.pos.z, m.x, m.z);
+        if (dd < stage.radius) this.advanceStage();
+      }
+    },
+    advanceStage: function () {
+      var cur = this.current;
+      if (!cur) return;
+      cur.stage++;
+      G.audio.pickup();
+      if (cur.stage >= cur.def.stages.length) { this.complete(); return; }
+      var stage = cur.def.stages[cur.stage];
+      G.hud.setObjective(cur.def.name, stage.text, stage.hint);
+      G.hud.toast("Next: " + stage.text);
+    },
+    complete: function () {
+      var cur = this.current;
+      var st = G.state;
+      st.cash += cur.def.pay;
+      st.missionsDone = (st.missionsDone || 0) + 1;
+      G.hud.toast("JOB DONE — " + cur.def.name + " paid " + G.money(cur.def.pay) + "!");
+      G.audio.cash();
+      G.save.saveGame();
+      if (st.missionsDone >= MISSION_DEFS.length) {
+        G.hud.setObjective("Solmar City", "All three jobs done. Solmar is yours, Mara.", "Free roam — cause trouble or lay low.");
+        G.hud.toast("STORY COMPLETE — Mara Voss runs Solmar now.");
       } else {
-        this.holdTimer = Math.max(0, this.holdTimer - dt);
+        G.hud.setObjective("Solmar City", "Job done. Press M when you're ready for the next one.", "");
       }
-    } else if (s.kind === 'escape') {
-      if (this.game.police.stars === 0) {
-        this.advance();
-      }
+      if (this.courierCar) { this.courierCar.courier = false; this.courierCar = null; }
+      this.current = null;
+    },
+    abort: function () {
+      if (this.courierCar) { this.courierCar.courier = false; this.courierCar = null; }
+      this.current = null;
+      if (this.markerMesh) this.markerMesh.visible = false;
     }
-  }
-}
+  };
+})();
