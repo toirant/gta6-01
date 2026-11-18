@@ -1,79 +1,59 @@
-# Solmar City — an open-world crime game
+# Solmar City
 
-[![Make GTA 6](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
-[![Rank](https://make.fun/badge/gta6-01/toirant/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
-[![Reward](https://make.fun/badge/gta6-01/toirant/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
+[![make.fun](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01)
+[![rank](https://make.fun/badge/gta6-01/toirant/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01)
+[![reward](https://make.fun/badge/gta6-01/toirant/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01)
 
-**Solmar City** is an original open-world crime game built for make.fun's
-["Make GTA 6"](https://make.fun/bounty/gta6-01) bounty. Mara Voss, a courier
-for hire, takes three jobs across one long afternoon in the sun-soaked coastal
-city of Solmar — and the whole Solmar PD comes along for the ride.
+An original open-world crime game built for the make.fun **gta6-01** bounty ("Make GTA 6").
+Play as Mara Voss in Solmar City — a sun-soaked coastal city of her own, with traffic,
+pedestrians, cars to steal, police who chase, three story missions, combat, a HUD with a
+live minimap, saves, and synthesised sound and music. Nothing here comes from any
+commercial game: the city, characters, vehicles, names, story, art and music are all
+invented for this entry.
 
-Everything is original: the city, the characters, the vehicles, the story, the
-art and the music. Nothing is borrowed from any commercial game.
+## Play
 
-## Play it
+Serve `game/` with any static file server and open `index.html` in desktop Chrome:
 
 ```sh
 node serve.ts
+# then open http://localhost:8080
 ```
 
-Then open http://localhost:8080 in desktop Chrome. No build step, no network
-requests at runtime — the game is static files under `game/`, with three.js
-vendored as `game/vendor/three.min.js`.
-
-## The game
-
-- **A city to explore** — six-by-six blocks of streets, towers, palms and a
-  marina, on foot (WASD + mouse camera, third person) and by car.
-- **Traffic and pedestrians** — cars cruise the roads, pedestrians stroll the
-  sidewalks and flee when things get loud.
-- **Cars to steal and drive** — walk up to a parked car (or a stopped one) and
-  press E. Driving is arcade physics: acceleration, braking, steering, skids
-  and crashes.
-- **A wanted level** — stealing, hitting pedestrians and shooting raise your
-  stars. Police cruisers and officers chase you, ram you and try to bust you.
-  Lay low and the heat fades.
-- **Missions and a story** — three jobs with on-screen markers, a gold beacon
-  and a minimap blip: pick up a package at the marina, chase down a courier
-  cab, then lose a full police dragnet. Each pays cash; progress saves.
-- **Combat** — fists (F) and a pistol (click to shoot) with ammo you can buy.
-- **HUD** — health, cash, wanted stars, mission objective, clock, speed, ammo
-  and a live minimap showing you, traffic, police and the mission marker.
-- **Menus and saving** — title screen with New Game / Continue, pause menu,
-  wasted/busted screens, and automatic saving to localStorage.
-- **Polish** — sun-soaked lighting, skid dust, hit particles, screen shake,
-  synthesised WebAudio sound effects and a looping synth soundtrack. No
-  external assets.
+No network is needed at runtime — every script, style and asset is a file under `game/`.
 
 ## Controls
 
-| Key | Action |
-| --- | --- |
-| W A S D | Move / drive |
-| Mouse drag | Orbit camera |
-| E | Enter / steal / exit car, pick up |
-| Click | Shoot pistol |
-| F | Punch |
-| R | Buy ammo ($5 a bullet) |
-| Shift | Sprint |
-| Space | Handbrake |
-| Esc / P | Pause |
+- **WASD** — move / drive · **mouse** — camera
+- **E** — enter / exit a car (parked cars are free; traffic cars are a crime)
+- **F** — punch · **mouse click** — fire the pistol
+- **Shift** — run · **M** — start the next mission · **Esc** — pause
+
+## The story
+
+Mara Voss came to Solmar with $250, a borrowed pistol and a name to make. Three jobs
+stand between her and the city: the Harbor Handoff at the marina, a Courier Chase
+across town, and a Dragnet Escape from the Solmar PD. Wanted stars rise when she
+steals, fights or shoots, and fall when she lays low.
 
 ## Structure
 
-The game's own source lives in `game/src/`, one file per job: `world.js` builds
-the city, `traffic.js` runs the cars and pedestrians, `player.js` is Mara on
-foot, `vehicles.js` is car physics, `police.js` is the wanted system,
-`missions.js` is the three jobs, `combat.js` is fists and the pistol, `hud.js`
-draws the HUD and minimap, `audio.js` synthesises every sound, `input.js`
-reads the keyboard and mouse, `save.js` keeps the campaign, `shots.js` stages
-the screenshots, and `main.js` ties it all together.
-
-`main.ts` at the repository root hands the game in: it copies `game/` and
-`screenshots/` to the output directory and writes `dossier.json` with the
-kit's `buildDossier`.
+- `game/index.html` — the page, HUD and menus
+- `game/src/world.js` — the city: streets, towers, palms, marina, beach
+- `game/src/player.js` — Mara on foot: movement, camera, car entry
+- `game/src/vehicles.js` — car factory and driving physics
+- `game/src/traffic.js` — traffic cars and pedestrians
+- `game/src/police.js` — wanted stars, patrol cars, officers
+- `game/src/missions.js` — the three story jobs
+- `game/src/combat.js` — punching and pistol combat
+- `game/src/hud.js` — HUD, minimap, menus
+- `game/src/audio.js` — synthesised effects and music loop
+- `game/src/save.js` — localStorage save / continue
+- `game/src/shots.js` — deterministic staging for the screenshots
+- `game/vendor/three.min.js` — vendored three.js r160
+- `main.ts` — the entry program: copies `game/` and `screenshots/` to the
+  output directory and writes `dossier.json`
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see `LICENSE`.
