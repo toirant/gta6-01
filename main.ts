@@ -3,7 +3,7 @@
 // repository into the output directory and writes /output/dossier.json with
 // buildDossier from the kit's vendor/makefun-game.ts.
 import { buildDossier } from "./vendor/makefun-game.ts";
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -15,7 +15,6 @@ if (!existsSync(join(repoRoot, "game", "index.html"))) {
   throw new Error("missing game/index.html in repository");
 }
 
-rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
 for (const name of ["game", "screenshots"]) {
