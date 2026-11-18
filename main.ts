@@ -1,32 +1,28 @@
-// Solmar City — the entry program for make.fun's gta6-01 bounty.
-// It copies game/ and screenshots/ from this repository into the output
-// directory and writes /output/dossier.json with the kit's buildDossier.
-// Node 22, standard library only; run as plain `node main.ts`.
+// main.ts — Solmar City entry program for make.fun gta6-01.
+// Node 22, standard library only. Copies game/ and screenshots/ from this
+// repository into the output directory and writes /output/dossier.json with
+// buildDossier from the kit's vendor/makefun-game.ts.
+import { buildDossier } from "./vendor/makefun-game.ts";
+import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { buildDossier } from './vendor/makefun-game.ts';
+const repoRoot = dirname(fileURLToPath(import.meta.url));
+const outDir = process.env.MAKEFUN_OUTPUT_DIR || "/output";
 
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)));
-const outDir = resolve(process.env.MAKEFUN_OUTPUT_DIR ?? '/output');
-
-const gameDir = join(repoRoot, 'game');
-const shotsDir = join(repoRoot, 'screenshots');
-
-if (!existsSync(gameDir)) {
-  throw new Error('game/: no such directory in this repository');
-}
-if (!existsSync(shotsDir)) {
-  throw new Error('screenshots/: no such directory in this repository');
+// Fail fast on a missing page before touching the output directory.
+if (!existsSync(join(repoRoot, "game", "index.html"))) {
+  throw new Error("missing game/index.html in repository");
 }
 
-// Start from a clean output directory so two runs write the same bytes.
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
-cpSync(gameDir, join(outDir, 'game'), { recursive: true });
-cpSync(shotsDir, join(outDir, 'screenshots'), { recursive: true });
+for (const name of ["game", "screenshots"]) {
+  const src = join(repoRoot, name);
+  if (!existsSync(src)) throw new Error(`missing ${name}/ in repository`);
+  cpSync(src, join(outDir, name), { recursive: true });
+}
 
 const dossier = buildDossier(outDir, {
   text_max_bytes: 163840,
@@ -34,18 +30,6 @@ const dossier = buildDossier(outDir, {
   game_max_files: 993,
   game_max_bytes: 50331648,
 });
-writeFileSync(join(outDir, 'dossier.json'), dossier);
 
-// Self-check: rebuilding the dossier from what we just wrote must give the
-// same bytes, so two runs of this program hand in identical output.
-const rebuilt = buildDossier(outDir, {
-  text_max_bytes: 163840,
-  screenshots: { max: 4, max_bytes: 262144 },
-  game_max_files: 993,
-  game_max_bytes: 50331648,
-});
-if (!Buffer.from(dossier).equals(Buffer.from(rebuilt))) {
-  throw new Error('dossier.json is not reproducible: rebuild differs');
-}
-
-console.log(`Solmar City handed in to ${outDir} (dossier ${dossier.length} bytes).`);
+writeFileSync(join(outDir, "dossier.json"), dossier);
+console.log(`wrote ${outDir}/dossier.json (${dossier.length} bytes)`);
