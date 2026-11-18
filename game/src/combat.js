@@ -1,181 +1,108 @@
-// Solmar City — combat on foot: fists and a pistol with ammo.
-// Hitscan shooting with a tracer line, muzzle flash and hit particles.
-
-import { dist2D } from './util.js';
-
-export class Combat {
-  constructor(scene) {
-    this.scene = scene;
-    this.tracer = null;
-    this.tracerLife = 0;
-    this.particles = []; // {mesh, vx, vy, vz, life}
-    this.muzzle = null;
-    this.muzzleLife = 0;
-  }
-
-  /** A short-lived line from the muzzle to the hit point. */
-  showTracer(from, to) {
-    if (this.tracer) this.scene.remove(this.tracer);
-    const geo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(from.x, from.y, from.z),
-      new THREE.Vector3(to.x, to.y, to.z),
-    ]);
-    this.tracer = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe9a8 }));
-    this.scene.add(this.tracer);
-    this.tracerLife = 0.08;
-  }
-
-  showMuzzle(x, y, z) {
-    if (this.muzzle) this.scene.remove(this.muzzle);
-    this.muzzle = new THREE.Mesh(
-      new THREE.SphereGeometry(0.28, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xffd94d })
-    );
-    this.muzzle.position.set(x, y, z);
-    this.scene.add(this.muzzle);
-    this.muzzleLife = 0.05;
-  }
-
-  /** Burst of small cubes that fly out and fade. */
-  burst(x, y, z, color, n) {
-    const mat = new THREE.MeshBasicMaterial({ color });
-    for (let i = 0; i < n; i++) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 0.16), mat);
-      m.position.set(x, y, z);
-      this.scene.add(m);
-      this.particles.push({
-        mesh: m,
-        vx: (Math.random() - 0.5) * 8,
-        vy: Math.random() * 6 + 2,
-        vz: (Math.random() - 0.5) * 8,
-        life: 0.5 + Math.random() * 0.3,
+// combat.js — punching and pistol combat on foot, with ammo and health.
+window.G = window.G || {};
+(function () {
+  var G = window.G;
+  var tracer = null, tracerUntil = 0;
+  G.combat = {
+    punchCooldown: 0,
+    shootCooldown: 0,
+    init: function (scene) {
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+      tracer = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffe9a8 }));
+      tracer.visible = false;
+      scene.add(tracer);
+    },
+    update: function (dt) {
+      this.punchCooldown = Math.max(0, this.punchCooldown - dt);
+      this.shootCooldown = Math.max(0, this.shootCooldown - dt);
+      if (tracer && tracer.visible && G.state.time > tracerUntil) tracer.visible = false;
+    },
+    punch: function () {
+      if (G.state.mode !== "play" || G.player.inCar) return;
+      if (this.punchCooldown > 0) return;
+      this.punchCooldown = 0.45;
+      G.audio.punch();
+      var p = G.player;
+      var fx = Math.sin(p.heading), fz = Math.cos(p.heading);
+      var hx = p.pos.x + fx * 1.6, hz = p.pos.z + fz * 1.6;
+      var ped = G.traffic.nearestPed(hx, hz, 2.2);
+      if (ped) {
+        ped.health -= 25;
+        ped.scared = 3;
+        G.police.addHeat(1, "assault");
+        G.hud.toast("You decked a pedestrian!");
+        if (ped.health <= 0) { ped.alive = false; ped.mesh.visible = false; G.police.addHeat(1, "someone is down"); }
+        return;
+      }
+      var off = null, bd = 2.2;
+      G.police.officers.forEach(function (o) {
+        if (!o.alive) return;
+        var d = G.dist2d(hx, hz, o.pos.x, o.pos.z);
+        if (d < bd) { bd = d; off = o; }
       });
-    }
-  }
-
-  dust(x, y, z) { this.burst(x, y, z, 0xcbb98f, 4); }
-
-  update(dt) {
-    if (this.tracerLife > 0) {
-      this.tracerLife -= dt;
-      if (this.tracerLife <= 0 && this.tracer) {
-        this.scene.remove(this.tracer);
-        this.tracer.geometry.dispose();
-        this.tracer = null;
+      if (off) {
+        off.health -= 25;
+        G.police.addHeat(1, "assaulting an officer");
+        if (off.health <= 0) { off.alive = false; off.mesh.visible = false; G.police.addHeat(1, "officer down"); }
+      }
+    },
+    shoot: function () {
+      var st = G.state;
+      if (st.mode !== "play" || G.player.inCar) return;
+      if (this.shootCooldown > 0) return;
+      if (st.ammo <= 0) { G.hud.toast("Out of ammo — find trouble another way."); this.shootCooldown = 0.3; return; }
+      this.shootCooldown = 0.28;
+      st.ammo -= 1;
+      G.audio.gunshot();
+      var p = G.player;
+      var fx = Math.sin(p.camYaw), fz = Math.cos(p.camYaw);
+      // The shot travels from Mara toward the camera's aim; hit the nearest
+      // target inside a cone in front of her.
+      var ox = p.pos.x, oz = p.pos.z;
+      var best = null, bestScore = 1e9, bestKind = null;
+      function consider(tx, tz, obj, kind) {
+        var dx = tx - ox, dz = tz - oz;
+        var dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist > 55 || dist < 0.5) return;
+        var dot = (dx * fx + dz * fz) / dist;
+        if (dot < 0.82) return;
+        var score = dist + (1 - dot) * 30;
+        if (score < bestScore) { bestScore = score; best = obj; bestKind = kind; }
+      }
+      G.traffic.peds.forEach(function (ped) { if (ped.alive) consider(ped.pos.x, ped.pos.z, ped, "ped"); });
+      G.police.officers.forEach(function (o) { if (o.alive) consider(o.pos.x, o.pos.z, o, "officer"); });
+      G.vehicles.cars.forEach(function (car) {
+        if (car.driver === "player" || car === p.inCar) return;
+        consider(car.pos.x, car.pos.z, car, "car");
+      });
+      var endX = ox + fx * 55, endZ = oz + fz * 55;
+      if (best) {
+        endX = best.pos ? best.pos.x : best.mesh.position.x;
+        endZ = best.pos ? best.pos.z : best.mesh.position.z;
+        if (bestKind === "ped") {
+          best.health -= 34; best.scared = 4;
+          G.police.addHeat(2, "shots fired");
+          if (best.health <= 0) { best.alive = false; best.mesh.visible = false; }
+        } else if (bestKind === "officer") {
+          best.health -= 34;
+          G.police.addHeat(2, "shooting at police");
+          if (best.health <= 0) { best.alive = false; best.mesh.visible = false; }
+        } else if (bestKind === "car") {
+          best.health -= 25;
+          if (best.health <= 0 && best.driver === "courier") { best.speed = 0; G.hud.toast("The courier's car is wrecked!"); }
+        }
+      }
+      if (tracer) {
+        var pos = tracer.geometry.attributes.position.array;
+        pos[0] = ox; pos[1] = 1.5; pos[2] = oz;
+        pos[3] = endX; pos[4] = 1.5; pos[5] = endZ;
+        tracer.geometry.attributes.position.needsUpdate = true;
+        tracer.visible = true;
+        tracerUntil = G.state.time + 0.08;
       }
     }
-    if (this.muzzleLife > 0) {
-      this.muzzleLife -= dt;
-      if (this.muzzleLife <= 0 && this.muzzle) {
-        this.scene.remove(this.muzzle);
-        this.muzzle = null;
-      }
-    }
-    for (const p of [...this.particles]) {
-      p.life -= dt;
-      if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        this.particles = this.particles.filter((q) => q !== p);
-        continue;
-      }
-      p.vy -= 18 * dt;
-      p.mesh.position.x += p.vx * dt;
-      p.mesh.position.y += p.vy * dt;
-      p.mesh.position.z += p.vz * dt;
-      if (p.mesh.position.y < 0.05) p.mesh.position.y = 0.05;
-      p.mesh.scale.setScalar(Math.max(0.05, p.life));
-    }
-  }
-
-  /**
-   * Fire the pistol from the player toward the camera aim direction.
-   * Returns 'hit' | 'miss' | 'noammo'.
-   */
-  shoot(game) {
-    const player = game.player;
-    if (player.ammo <= 0) return 'noammo';
-    if (player.shootCooldown > 0) return 'wait';
-    player.shootCooldown = 0.28;
-    player.ammo -= 1;
-    const dir = player.aimDirection();
-    const ox = player.x, oz = player.z, oy = 1.5;
-    const range = 60;
-    let hitAt = null, hitKind = null, hitObj = null;
-    // Nearest pedestrian / officer / police car along the aim ray.
-    const targets = [];
-    for (const p of game.traffic.peds) if (p.alive) targets.push({ x: p.x, z: p.z, r: 1.0, kind: 'ped', obj: p });
-    for (const o of game.police.officers) if (o.alive) targets.push({ x: o.x, z: o.z, r: 1.0, kind: 'officer', obj: o });
-    for (const c of game.police.cars) targets.push({ x: c.x, z: c.z, r: 2.4, kind: 'policecar', obj: c });
-    for (const t of game.traffic.cars) targets.push({ x: t.car.x, z: t.car.z, r: 2.4, kind: 'car', obj: t.car });
-    let bestT = range;
-    for (const t of targets) {
-      const rx = t.x - ox, rz = t.z - oz;
-      const along = rx * dir.x + rz * dir.z;
-      if (along < 0 || along > range) continue;
-      const perp = Math.abs(rx * dir.z - rz * dir.x);
-      if (perp < t.r && along < bestT) {
-        bestT = along; hitAt = { x: ox + dir.x * along, y: oy, z: oz + dir.z * along };
-        hitKind = t.kind; hitObj = t.obj;
-      }
-    }
-    const end = hitAt || { x: ox + dir.x * range, y: oy, z: oz + dir.z * range };
-    this.showTracer({ x: ox, y: oy, z: oz }, end);
-    this.showMuzzle(ox + dir.x * 1.2, oy, oz + dir.z * 1.2);
-    game.audio.gunshot();
-    game.shake(0.15);
-    game.traffic.scare(ox, oz, 40);
-    if (!hitAt) return 'miss';
-
-    this.burst(end.x, end.y, end.z, 0xff5a3c, 8);
-    if (hitKind === 'ped') {
-      game.traffic.killPed(hitObj);
-      game.police.addHeat(20, game);
-      game.addCash(20, 'ped down');
-    } else if (hitKind === 'officer') {
-      hitObj.alive = false;
-      hitObj.mesh.rotation.x = -Math.PI / 2;
-      hitObj.mesh.position.y = 0.3;
-      game.police.addHeat(30, game);
-    } else if (hitKind === 'policecar' || hitKind === 'car') {
-      hitObj.damage(34);
-      if (!hitObj.alive) {
-        this.burst(hitObj.x, 1, hitObj.z, 0xff8a3c, 14);
-        game.audio.crash();
-      }
-      game.police.addHeat(15, game);
-    }
-    return 'hit';
-  }
-
-  /** A close-range punch: hits the nearest ped or officer in front. */
-  punch(game) {
-    const player = game.player;
-    if (player.punchCooldown > 0) return false;
-    player.punchCooldown = 0.45;
-    const dir = player.aimDirection();
-    const px = player.x + dir.x * 1.2, pz = player.z + dir.z * 1.2;
-    game.audio.punch();
-    let hit = false;
-    for (const p of game.traffic.peds) {
-      if (p.alive && dist2D(px, pz, p.x, p.z) < 1.4) {
-        game.traffic.killPed(p);
-        game.police.addHeat(15, game);
-        game.addCash(15, 'ped down');
-        this.burst(p.x, 1.2, p.z, 0xffe9a8, 6);
-        hit = true;
-      }
-    }
-    for (const o of game.police.officers) {
-      if (o.alive && dist2D(px, pz, o.x, o.z) < 1.4) {
-        o.alive = false;
-        o.mesh.rotation.x = -Math.PI / 2;
-        o.mesh.position.y = 0.3;
-        game.police.addHeat(20, game);
-        this.burst(o.x, 1.2, o.z, 0xffe9a8, 6);
-        hit = true;
-      }
-    }
-    if (!hit) game.traffic.scare(player.x, player.z, 12);
-    return hit;
-  }
-}
+  };
+  G.tryShoot = function () { G.combat.shoot(); };
+  G.onPunchKey = function () { G.combat.punch(); };
+})();
