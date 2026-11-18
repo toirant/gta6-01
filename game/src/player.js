@@ -1,164 +1,138 @@
-// Solmar City — the player on foot: movement, third-person camera, car entry.
-// Mara Voss, a courier-turned-wheelwoman, built from boxes like everyone else.
-
-import { clamp, damp, angleLerp, angleDiff, dist2D } from './util.js';
-
-function buildPlayerMesh() {
-  const g = new THREE.Group();
-  const jacket = new THREE.MeshLambertMaterial({ color: 0x8a2f2f });
-  const skin = new THREE.MeshLambertMaterial({ color: 0xe8b48a });
-  const pants = new THREE.MeshLambertMaterial({ color: 0x24304a });
-  const hair = new THREE.MeshLambertMaterial({ color: 0x1c1210 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.8, 0.32), jacket);
-  body.position.y = 1.1;
-  body.castShadow = true;
-  g.add(body);
-  const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), skin);
-  head.position.y = 1.68;
-  head.castShadow = true;
-  g.add(head);
-  const hairM = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.16, 0.38), hair);
-  hairM.position.y = 1.9;
-  g.add(hairM);
-  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.75, 0.24), pants);
-  legL.position.set(-0.15, 0.38, 0);
-  g.add(legL);
-  const legR = legL.clone();
-  legR.position.x = 0.15;
-  g.add(legR);
-  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, 0.2), jacket);
-  armL.position.set(-0.4, 1.1, 0);
-  g.add(armL);
-  const armR = armL.clone();
-  armR.position.x = 0.4;
-  g.add(armR);
-  g.userData = { legL, legR, armL, armR, body, head };
-  return g;
-}
-
-export class Player {
-  constructor(scene, world, x, z) {
-    this.scene = scene;
-    this.world = world;
-    this.mesh = buildPlayerMesh();
-    scene.add(this.mesh);
-    this.x = x; this.z = z;
-    this.heading = 0;       // facing
-    this.camYaw = 0;        // camera orbit
-    this.camPitch = 0.32;
-    this.camDist = 9;
-    this.speed = 0;
-    this.health = 100;
-    this.inCar = null;      // Car instance or null
-    this.walkPhase = 0;
-    this.aiming = false;
-    this.punchCooldown = 0;
-    this.shootCooldown = 0;
-    this.ammo = 24;
-    this.dead = false;
+// player.js — Mara Voss on foot: third-person movement, camera and car entry.
+window.G = window.G || {};
+(function () {
+  var G = window.G;
+  function makePersonMesh(shirt, pants, skin) {
+    var g = new THREE.Group();
+    var mat = function (c) { return new THREE.MeshLambertMaterial({ color: c }); };
+    var legs = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.8, 0.34), mat(pants));
+    legs.position.y = 0.4; g.add(legs);
+    var torso = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.85, 0.4), mat(shirt));
+    torso.position.y = 1.22; g.add(torso);
+    var head = new THREE.Mesh(new THREE.SphereGeometry(0.3, 12, 10), mat(skin));
+    head.position.y = 1.95; g.add(head);
+    var hair = new THREE.Mesh(new THREE.SphereGeometry(0.32, 12, 8, 0, Math.PI * 2, 0, Math.PI * 0.55), mat(0x2b1d12));
+    hair.position.y = 2.0; g.add(hair);
+    var armL = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.75, 0.2), mat(shirt));
+    armL.position.set(-0.52, 1.2, 0); g.add(armL);
+    var armR = armL.clone(); armR.position.x = 0.52; g.add(armR);
+    g.userData.armL = armL; g.userData.armR = armR;
+    return g;
   }
-
-  get pos() { return { x: this.x, z: this.z }; }
-
-  /** Third-person camera: orbit with mouse drag, sit behind the player or the car. */
-  updateCamera(camera, dt, input) {
-    this.camYaw -= input.mouseDX * 0.004;
-    this.camPitch = clamp(this.camPitch + input.mouseDY * 0.003, -0.15, 1.1);
-    const target = this.inCar
-      ? { x: this.inCar.x, z: this.inCar.z, y: 1.6 }
-      : { x: this.x, z: this.z, y: 1.6 };
-    const dist = this.inCar ? 10.5 : this.camDist;
-    const cx = target.x - Math.sin(this.camYaw) * Math.cos(this.camPitch) * dist;
-    const cz = target.z - Math.cos(this.camYaw) * Math.cos(this.camPitch) * dist;
-    const cy = target.y + Math.sin(this.camPitch) * dist + 1.2;
-    camera.position.x = damp(camera.position.x, cx, 10, dt);
-    camera.position.y = damp(camera.position.y, Math.max(cy, 1.2), 10, dt);
-    camera.position.z = damp(camera.position.z, cz, 10, dt);
-    camera.lookAt(target.x, target.y, target.z);
-  }
-
-  /** On-foot movement step. Returns nothing; reads input axes relative to camera. */
-  updateOnFoot(dt, input) {
-    if (this.inCar || this.dead) return;
-    const axes = input.axes();
-    const sprint = input.down('ShiftLeft') || input.down('ShiftRight');
-    const maxSpeed = sprint ? 9.5 : 5.8;
-    const wantX = Math.sin(this.camYaw) * axes.f - Math.cos(this.camYaw) * axes.s;
-    const wantZ = Math.cos(this.camYaw) * axes.f + Math.sin(this.camYaw) * axes.s;
-    const moving = Math.hypot(wantX, wantZ) > 0.1;
-    if (moving) {
-      const len = Math.hypot(wantX, wantZ);
-      const tx = (wantX / len) * maxSpeed;
-      const tz = (wantZ / len) * maxSpeed;
-      this.x += tx * dt;
-      this.z += tz * dt;
-      this.heading = angleLerp(this.heading, Math.atan2(tx, tz), Math.min(1, dt * 12));
-      this.speed = maxSpeed;
-      this.walkPhase += dt * maxSpeed * 1.6;
-    } else {
-      this.speed = 0;
+  G.makePersonMesh = makePersonMesh;
+  G.player = {
+    mesh: null, pos: null, heading: 0, camYaw: 0, camPitch: 0.32,
+    speed: 0, inCar: null, walkPhase: 0, health: 100,
+    create: function (scene) {
+      this.mesh = makePersonMesh(0xd94f3d, 0x2c3e50, 0xe8b98a);
+      this.pos = new THREE.Vector3(0, 0, 168);
+      this.heading = Math.PI;
+      this.mesh.position.copy(this.pos);
+      scene.add(this.mesh);
+      return this.mesh;
+    },
+    reset: function (x, z, heading) {
+      this.pos.set(x, 0, z);
+      this.heading = heading === undefined ? Math.PI : heading;
+      this.camYaw = this.heading;
+      this.inCar = null;
+      this.health = 100;
+      if (this.mesh) { this.mesh.position.copy(this.pos); this.mesh.visible = true; }
+    },
+    update: function (dt, camera) {
+      var st = G.state;
+      var m = G.input.takeMouse();
+      this.camYaw -= m.dx * 0.0032;
+      this.camPitch = G.clamp(this.camPitch + m.dy * 0.0024, 0.08, 1.1);
+      if (this.inCar) { this.updateCamera(camera, dt); return; }
+      var ax = G.input.axis();
+      var run = G.input.down("ShiftLeft") || G.input.down("ShiftRight");
+      var maxSpeed = run ? 9.5 : 5.2;
+      var moving = (ax.x !== 0 || ax.z !== 0);
+      var targetSpeed = moving ? maxSpeed : 0;
+      this.speed = G.lerp(this.speed, targetSpeed, 1 - Math.exp(-10 * dt));
+      if (moving) {
+        var fwdX = Math.sin(this.camYaw), fwdZ = Math.cos(this.camYaw);
+        var rightX = Math.cos(this.camYaw), rightZ = -Math.sin(this.camYaw);
+        var mx = fwdX * -ax.z + rightX * ax.x;
+        var mz = fwdZ * -ax.z + rightZ * ax.x;
+        var len = Math.sqrt(mx * mx + mz * mz) || 1;
+        mx /= len; mz /= len;
+        this.pos.x += mx * this.speed * dt;
+        this.pos.z += mz * this.speed * dt;
+        this.heading = G.turnToward(this.heading, Math.atan2(mx, mz), 10 * dt);
+        this.walkPhase += dt * this.speed * 1.6;
+      }
+      G.world.collide(this.pos, 0.7);
+      this.mesh.position.copy(this.pos);
+      this.mesh.rotation.y = this.heading;
+      var swing = moving ? Math.sin(this.walkPhase) * 0.55 : 0;
+      this.mesh.userData.armL.rotation.x = swing;
+      this.mesh.userData.armR.rotation.x = -swing;
+      this.updateCamera(camera, dt);
+      if (G.input.down("KeyE")) this.tryEnterCar();
+    },
+    updateCamera: function (camera, dt) {
+      var anchor;
+      if (this.inCar) {
+        anchor = this.inCar.mesh.position;
+      } else {
+        anchor = this.pos;
+      }
+      var dist = this.inCar ? 11 : 8.5;
+      var height = this.inCar ? 4.2 : 3.6;
+      var cx = anchor.x - Math.sin(this.camYaw) * Math.cos(this.camPitch) * dist;
+      var cz = anchor.z - Math.cos(this.camYaw) * Math.cos(this.camPitch) * dist;
+      var cy = (this.inCar ? 1.2 : 1.8) + Math.sin(this.camPitch) * dist * 0.9 + height - 3;
+      var tx = anchor.x, ty = (this.inCar ? 1.4 : 1.7), tz = anchor.z;
+      camera.position.x = G.lerp(camera.position.x, cx, 1 - Math.exp(-14 * dt));
+      camera.position.y = G.lerp(camera.position.y, Math.max(cy, 1.2), 1 - Math.exp(-14 * dt));
+      camera.position.z = G.lerp(camera.position.z, cz, 1 - Math.exp(-14 * dt));
+      camera.lookAt(tx, ty, tz);
+    },
+    tryEnterCar: function () {
+      if (this.inCar) return;
+      var now = G.state.time;
+      if (this._lastEnter && now - this._lastEnter < 0.4) return;
+      this._lastEnter = now;
+      var car = G.vehicles.nearestCar(this.pos.x, this.pos.z, 4.5);
+      if (!car) return;
+      this.enterCar(car);
+    },
+    enterCar: function (car) {
+      if (car.police) {
+        G.hud.toast("That's a police car — the doors are locked.");
+        return;
+      }
+      this.inCar = car;
+      car.driver = "player";
+      this.mesh.visible = false;
+      if (!car.stolen && car.parked) {
+        car.stolen = true;
+        G.police.addHeat(1, "car theft");
+        G.hud.toast("You took the " + car.name + ". The city noticed.");
+      } else if (!car.stolen) {
+        car.stolen = true;
+        G.police.addHeat(1, "carjacking");
+        G.hud.toast("You yanked the driver out of the " + car.name + "!");
+      }
+      G.audio.click();
+    },
+    exitCar: function () {
+      if (!this.inCar) return;
+      var car = this.inCar;
+      car.driver = null;
+      this.inCar = null;
+      var sx = Math.sin(this.heading + Math.PI / 2), sz = Math.cos(this.heading + Math.PI / 2);
+      this.pos.set(car.mesh.position.x + sx * 2.4, 0, car.mesh.position.z + sz * 2.4);
+      this.mesh.visible = true;
+      this.mesh.position.copy(this.pos);
+      this._lastEnter = G.state.time;
+    },
+    damage: function (amount, cause) {
+      if (G.state.mode !== "play") return;
+      this.health = Math.max(0, this.health - amount);
+      if (this.health <= 0) G.gameOver(cause || "dead");
     }
-    const hit = this.world.collideCircle(this.x, this.z, 0.55);
-    this.x = hit.x; this.z = hit.z;
-    this.x = clamp(this.x, -215, 215);
-    this.z = clamp(this.z, -215, 245);
-    // Walk-cycle animation.
-    const swing = moving ? Math.sin(this.walkPhase) * 0.55 : 0;
-    const u = this.mesh.userData;
-    u.legL.rotation.x = swing;
-    u.legR.rotation.x = -swing;
-    u.armL.rotation.x = -swing * 0.8;
-    u.armR.rotation.x = swing * 0.8;
-    this.mesh.position.set(this.x, 0, this.z);
-    this.mesh.rotation.y = this.heading;
-    this.punchCooldown = Math.max(0, this.punchCooldown - dt);
-    this.shootCooldown = Math.max(0, this.shootCooldown - dt);
-  }
-
-  /** Find the nearest car the player can enter (within 4 units). */
-  nearestCar(cars) {
-    let best = null, bestD = 4.5;
-    for (const c of cars) {
-      if (!c.alive) continue;
-      const d = dist2D(this.x, this.z, c.x, c.z);
-      if (d < bestD) { best = c; bestD = d; }
-    }
-    return best;
-  }
-
-  enterCar(car) {
-    this.inCar = car;
-    car.driver = 'player';
-    this.mesh.visible = false;
-    this.camYaw = car.heading; // camera looks along the car's nose
-  }
-
-  exitCar() {
-    if (!this.inCar) return;
-    const car = this.inCar;
-    car.driver = null;
-    car.speed = 0;
-    this.inCar = null;
-    // Step out to the car's left.
-    this.x = car.x - Math.cos(car.heading) * 2.2;
-    this.z = car.z + Math.sin(car.heading) * 2.2;
-    const hit = this.world.collideCircle(this.x, this.z, 0.55);
-    this.x = hit.x; this.z = hit.z;
-    this.mesh.visible = true;
-    this.mesh.position.set(this.x, 0, this.z);
-    this.camYaw = car.heading;
-  }
-
-  hurt(amount) {
-    if (this.dead) return;
-    this.health = Math.max(0, this.health - amount);
-    if (this.health <= 0) this.dead = true;
-  }
-
-  heal(amount) { this.health = clamp(this.health + amount, 0, 100); }
-
-  /** Where the player is looking (for shooting): camera forward on the XZ plane. */
-  aimDirection() {
-    return { x: Math.sin(this.camYaw), z: Math.cos(this.camYaw) };
-  }
-}
+  };
+})();
