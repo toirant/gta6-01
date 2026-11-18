@@ -1,19 +1,137 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Solmar City — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
-  #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0c141c;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: #fff; }
+  #game-canvas, #game-canvas canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hidden { display: none !important; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+  #hud-top-left { position: absolute; top: 14px; left: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .pill { background: rgba(10, 16, 22, 0.72); border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px; padding: 6px 12px; font-size: 15px; font-weight: 600; width: max-content; }
+  #health-bar { width: 190px; height: 12px; background: rgba(10,16,22,0.72);
+    border: 1px solid rgba(255,255,255,0.25); border-radius: 6px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #37c978, #7be495); transition: width 0.2s; }
+  #health-fill.low { background: linear-gradient(90deg, #d9382a, #ff7a5c); }
+  #stars { font-size: 22px; letter-spacing: 3px; color: #ffd94d; text-shadow: 0 0 8px rgba(0,0,0,0.7); }
+  #stars.hot { animation: pulse 0.7s infinite alternate; }
+  @keyframes pulse { from { opacity: 1; } to { opacity: 0.55; } }
+  #objective { max-width: 420px; font-size: 14px; font-weight: 500; line-height: 1.35; }
+  #hud-top-right { position: absolute; top: 14px; right: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  #minimap { width: 190px; height: 190px; border: 2px solid rgba(255,255,255,0.35); border-radius: 8px;
+    background: rgba(12,20,28,0.8); box-shadow: 0 2px 14px rgba(0,0,0,0.5); }
+  #clock { font-size: 18px; }
+  #mission-list { background: rgba(10,16,22,0.72); border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; line-height: 1.6; text-align: left; min-width: 190px; }
+  #mission-list .done { color: #7be495; }
+  #mission-list .current { color: #ffd94d; font-weight: 700; }
+  #hud-bottom { position: absolute; left: 14px; bottom: 14px; display: flex; gap: 10px; align-items: flex-end; }
+  #prompt { position: absolute; left: 50%; bottom: 90px; transform: translateX(-50%);
+    background: rgba(10,16,22,0.8); border: 1px solid #ffd94d; color: #ffd94d;
+    padding: 8px 16px; border-radius: 8px; font-size: 16px; font-weight: 700; }
+  #toast { position: absolute; left: 50%; top: 22%; transform: translateX(-50%); text-align: center;
+    opacity: 0; transition: opacity 0.3s; pointer-events: none; max-width: 560px; }
+  #toast.show { opacity: 1; }
+  #toast-title { font-size: 30px; font-weight: 800; color: #ffd94d; text-shadow: 0 2px 10px rgba(0,0,0,0.8); }
+  #toast-body { font-size: 16px; margin-top: 6px; text-shadow: 0 1px 6px rgba(0,0,0,0.9); line-height: 1.4; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px;
+    border: 2px solid rgba(255,255,255,0.85); border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.8); }
+
+  /* ---------- Screens ---------- */
+  .screen { position: absolute; inset: 0; z-index: 10; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; text-align: center;
+    background: linear-gradient(180deg, rgba(8,14,22,0.55) 0%, rgba(8,14,22,0.82) 100%); }
+  .screen h1 { font-size: 72px; font-weight: 900; letter-spacing: 4px; color: #ffd94d;
+    text-shadow: 0 4px 0 #a33d1e, 0 8px 24px rgba(0,0,0,0.7); }
+  .screen h2 { font-size: 20px; font-weight: 600; color: #cfe3f5; margin-top: 4px; letter-spacing: 2px; }
+  .screen p { max-width: 620px; margin-top: 18px; font-size: 16px; line-height: 1.55; color: #e8eef4; }
+  .controls { margin-top: 20px; font-size: 14px; line-height: 1.9; color: #b9c9d8;
+    background: rgba(10,16,22,0.6); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px; padding: 12px 22px; text-align: left; }
+  .controls b { color: #ffd94d; }
+  .btn-row { margin-top: 26px; display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+  button { pointer-events: auto; cursor: pointer; font-size: 17px; font-weight: 700;
+    padding: 12px 26px; border-radius: 10px; border: 2px solid #ffd94d;
+    background: #ffd94d; color: #231303; }
+  button:hover { background: #ffe27a; }
+  button.secondary { background: transparent; color: #ffd94d; }
+  button.secondary:hover { background: rgba(255,217,77,0.15); }
+  #title-save { margin-top: 16px; font-size: 14px; color: #9fb4c6; }
+  #btn-mute { position: absolute; bottom: 14px; right: 14px; z-index: 20; font-size: 13px; padding: 8px 12px; }
+  #over-title { font-size: 84px; color: #ff5a3c; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
-<p id="status" role="status" aria-live="polite"></p>
-<script type="module" src="./src/main.js"></script>
+<div id="game-canvas"></div>
+
+<div id="hud" class="hidden">
+  <div id="hud-top-left">
+    <div id="health-bar"><div id="health-fill"></div></div>
+    <div class="pill">❤ <span id="health-num">100</span></div>
+    <div class="pill" id="cash">$250</div>
+    <div id="stars">☆☆☆☆☆</div>
+    <div class="pill" id="objective"></div>
+  </div>
+  <div id="hud-top-right">
+    <canvas id="minimap" width="190" height="190"></canvas>
+    <div class="pill" id="clock">09:00</div>
+    <div id="mission-list"></div>
+  </div>
+  <div id="hud-bottom">
+    <div class="pill" id="ammo">Ammo 24</div>
+    <div class="pill" id="speed">0 mph</div>
+  </div>
+  <div id="prompt" style="display:none"></div>
+  <div id="toast"><div id="toast-title"></div><div id="toast-body"></div></div>
+  <div id="crosshair"></div>
+</div>
+
+<div id="screen-title" class="screen">
+  <h1>SOLMAR CITY</h1>
+  <h2>AN OPEN-WORLD CRIME GAME</h2>
+  <p>Mara Voss came to Solmar to drive. The city gave her three jobs, a fast car,
+     and the whole Solmar PD on her tail. Explore the city on foot or by car, steal
+     what you need, lose the heat, and finish all three jobs.</p>
+  <div class="controls">
+    <b>W A S D</b> move / drive &nbsp;·&nbsp; <b>Mouse drag</b> camera &nbsp;·&nbsp; <b>E</b> enter / steal / exit car, pick up<br>
+    <b>Click</b> shoot pistol &nbsp;·&nbsp; <b>F</b> punch &nbsp;·&nbsp; <b>R</b> buy ammo ($5) &nbsp;·&nbsp; <b>Shift</b> sprint<br>
+    <b>Space</b> handbrake &nbsp;·&nbsp; <b>Esc / P</b> pause &nbsp;·&nbsp; Progress saves automatically
+  </div>
+  <div class="btn-row">
+    <button id="btn-new">New Game</button>
+    <button id="btn-continue" class="secondary">Continue</button>
+  </div>
+  <div id="title-save"></div>
+</div>
+
+<div id="screen-pause" class="screen hidden">
+  <h1 style="font-size:52px">PAUSED</h1>
+  <p>Solmar waits for no one. Well — right now it does.</p>
+  <div class="btn-row">
+    <button id="btn-resume">Resume</button>
+    <button id="btn-quit-title" class="secondary">Save &amp; Quit to Title</button>
+  </div>
+</div>
+
+<div id="screen-over" class="screen hidden">
+  <h1 id="over-title">WASTED</h1>
+  <p id="over-body"></p>
+  <div class="btn-row">
+    <button id="btn-retry">Try Again</button>
+    <button id="btn-title-after-over" class="secondary">Title Screen</button>
+  </div>
+</div>
+
+<button id="btn-mute">🔊 Sound</button>
+
+<script src="vendor/three.min.js"></script>
+<script type="module" src="src/main.js"></script>
 </body>
 </html>
