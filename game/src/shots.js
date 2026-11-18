@@ -1,63 +1,73 @@
-// Solmar City — deterministic screenshot staging (?shot=title|drive|chase|mission).
-// Each shot puts the live game in a composed state and raises window.__shotReady
-// once a few frames have rendered, so a screenshot script can capture it.
-
-export function applyShot(game, shot) {
-  const g = game;
-  if (shot === 'title') {
-    g.setMode('title');
-    // Slow orbit around Solmar Tower for the title backdrop.
-    g.titleOrbit = true;
-    return;
+// shots.js — deterministic staging for the four screenshots (?shot=title|drive|chase|mission).
+// The hook only arranges the scene; every pixel comes from the game's own renderer.
+window.G = window.G || {};
+(function () {
+  var G = window.G;
+  function param(name) {
+    var m = new RegExp("[?&]" + name + "=([^&#]*)").exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : null;
   }
-  // The other shots all start a real game.
-  g.startNewGame();
-  g.setMode('playing');
-  if (shot === 'drive') {
-    // Put Mara in a red sedan on Coral Row, traffic around her, car rolling.
-    const car = g.spawnParkedCar(0, -29 + 3.5, 0, 0xc23b2e);
-    g.player.x = 0; g.player.z = -29 + 3.5;
-    g.player.enterCar(car);
-    g.player.camYaw = 0;
-    g.shotAutodrive = true;
-    g.missions.startMission(0);
-    g.missions.stepIndex = 0;
-    g.missions.updateMarker();
-  } else if (shot === 'chase') {
-    const car = g.spawnParkedCar(0, 29, 0, 0x2e6fc2);
-    g.player.x = 0; g.player.z = 29;
-    g.player.enterCar(car);
-    g.player.camYaw = 0;
-    g.shotAutodrive = true;
-    g.police.addHeat(55, g);
-    for (let i = 0; i < 3; i++) g.police.spawnCarNear(g.player.x, g.player.z, 26 + i * 6);
-    // Stage two cruisers ahead on the road, headlights toward the player,
-    // so the chase reads in the frame (the third comes up from behind).
-    const cops = g.police.cars;
-    if (cops[0]) {
-      cops[0].x = 6; cops[0].z = g.player.z + 42;
-      cops[0].heading = Math.PI; cops[0].mesh.rotation.y = Math.PI;
+  G.shots = {
+    name: param("shot"),
+    apply: function () {
+      var name = this.name;
+      if (!name) return false;
+      var p = G.player, st = G.state;
+      st.mode = "play";
+      G.hud.hideEnd(); G.hud.hidePause();
+      G.el("title-screen").classList.add("hidden");
+      G.hud.show();
+      if (name === "title") {
+        st.mode = "title";
+        G.hud.hide();
+        G.el("title-screen").classList.remove("hidden");
+        p.reset(0, 150, Math.PI);
+        p.camYaw = Math.PI;
+        window.__shotReady = true;
+        return true;
+      }
+      if (name === "drive") {
+        var car = G.vehicles.cars.filter(function (c) { return c.parked; })[2] || G.vehicles.cars[0];
+        p.reset(car.pos.x + 3, car.pos.z, car.heading);
+        p.enterCar(car);
+        car.speed = 18;
+        p.camYaw = car.heading;
+        G.shots.cruise = true;
+        G.hud.setObjective("Solmar City", "Cruise the boulevard — press M to take a job", "E exits the car");
+        window.__shotReady = true;
+        return true;
+      }
+      if (name === "chase") {
+        var car2 = G.vehicles.cars.filter(function (c) { return c.parked; })[4] || G.vehicles.cars[0];
+        p.reset(car2.pos.x + 3, car2.pos.z, car2.heading);
+        p.enterCar(car2);
+        car2.speed = 22;
+        st.wanted = 3;
+        G.shots.cruise = true;
+        G.audio.setSiren(true);
+        G.police.spawnCar(); G.police.spawnCar();
+        // Stage the patrol cars just behind the player so the chase reads in frame.
+        G.police.cars.forEach(function (c, i) {
+          var fx = Math.sin(car2.heading), fz = Math.cos(car2.heading);
+          var side = i === 0 ? -4 : 4;
+          c.pos.set(car2.pos.x - fx * 15 - fz * side, 0, car2.pos.z - fz * 15 + fx * side);
+          c.heading = car2.heading;
+          c.speed = 20;
+          c.mesh.position.copy(c.pos);
+        });
+        G.hud.setObjective("Dragnet", "Lose the patrol cars — wanted level 3", "Lay low to cool the heat");
+        window.__shotReady = true;
+        return true;
+      }
+      if (name === "mission") {
+        p.reset(0, 168, Math.PI);
+        p.camYaw = Math.PI;
+        G.missions.startNext();
+        st.cash = 750;
+        window.__shotReady = true;
+        return true;
+      }
+      return false;
     }
-    if (cops[1]) {
-      cops[1].x = -6; cops[1].z = g.player.z + 30;
-      cops[1].heading = Math.PI; cops[1].mesh.rotation.y = Math.PI;
-    }
-    // Catch the chase early, before the cruisers close in and pass behind.
-    g.shotReadyAfter = 30;
-    g.missions.startMission(2);
-    // Mission 3 starts with heat; keep the chase visible.
-    g.police.heat = 55;
-  } else if (shot === 'mission') {
-    // On foot by the marina pier, pistol out, mission 1 active, peds nearby.
-    // (On the sand beside the pier — the pier itself is solid.)
-    g.player.x = -52; g.player.z = 228;
-    g.player.heading = 0;
-    g.player.camYaw = 0;
-    g.missions.startMission(0);
-    g.traffic.addPed(-48, 232);
-    g.traffic.addPed(-56, 224);
-  }
-  // Let the world settle, then signal readiness.
-  g.shotFrames = 0;
-  if (!g.shotReadyAfter) g.shotReadyAfter = 60;
-}
+  };
+})();
